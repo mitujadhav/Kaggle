@@ -1,3 +1,13 @@
+library(DMwR)
+library(Boruta)
+library(dplyr)
+library(caret)
+library(randomForest)
+library(hydroGOF)
+library(e1071)
+library(corrplot)
+
+
 train<- read.csv(file.path("D:/My Stuff/Kaggle/House Pricing/train.csv"),stringsAsFactors = FALSE)
 test<- read.csv(file.path("D:/My Stuff/Kaggle/House Pricing/train.csv"), stringsAsFactors = FALSE)
 SUBMISSION<- read.csv(file.path("D:/My Stuff/Kaggle/House Pricing/Sample_Submission.csv"), stringsAsFactors = FALSE)
@@ -66,12 +76,9 @@ train_test40<-Remove_Cols_40NAs(train_test)
 
 
 #-------------------------------------------------------------------------------
-#install.packages("DMwR")
-library(DMwR)
+
 inputData <- knnImputation(train_test40)
 
-
-library(caret)
 train2<-inputData[1:1460,]
 test2<-inputData[1461:2920,]
 train2<-cbind(train2,SalePrice)
@@ -99,77 +106,76 @@ train2<-cbind(train2,SalePrice)
 # sort(relImportance$lmg, decreasing = TRUE)
 # 
 
-library(Boruta)
+set.seed(123)
 boruta_output <- Boruta(train2$SalePrice ~ ., data = na.omit(train2), doTrace=2)
+boruta_output$finalDecision
 
-# 
-# boruta_output$finalDecision
-# MSSubClass      MSZoning   LotFrontage       LotArea        Street      LotShape 
-# Confirmed     Confirmed     Confirmed     Confirmed      Rejected     Tentative 
+table(boruta_output$finalDecision)
 
-# LandContour     Utilities     LotConfig     LandSlope  Neighborhood    Condition1 
-# Confirmed      Rejected      Rejected     Tentative     Confirmed     Tentative 
-
-# Condition2      BldgType    HouseStyle   OverallQual   OverallCond     YearBuilt 
-# Rejected     Confirmed     Confirmed     Confirmed     Confirmed     Confirmed 
-
-# YearRemodAdd     RoofStyle      RoofMatl   Exterior1st   Exterior2nd    MasVnrType 
-# Confirmed     Tentative      Rejected     Confirmed     Confirmed     Confirmed 
-
-# MasVnrArea     ExterQual     ExterCond    Foundation      BsmtQual      BsmtCond 
-# Confirmed     Confirmed      Rejected     Confirmed     Confirmed      Rejected 
-
-# BsmtExposure  BsmtFinType1    BsmtFinSF1  BsmtFinType2    BsmtFinSF2     BsmtUnfSF 
-# Tentative     Confirmed     Confirmed      Rejected      Rejected     Confirmed 
-
-# TotalBsmtSF       Heating     HeatingQC    CentralAir    Electrical     X1stFlrSF 
-# Confirmed      Rejected     Confirmed     Confirmed     Tentative     Confirmed 
-
-# X2ndFlrSF  LowQualFinSF     GrLivArea  BsmtFullBath  BsmtHalfBath      FullBath 
-# Confirmed      Rejected     Confirmed     Confirmed      Rejected     Confirmed 
-
-# HalfBath  BedroomAbvGr  KitchenAbvGr   KitchenQual  TotRmsAbvGrd    Functional 
-# Confirmed     Confirmed     Confirmed     Confirmed     Confirmed     Tentative 
-
-# Fireplaces    GarageType   GarageYrBlt  GarageFinish    GarageCars    GarageArea 
-# Confirmed     Confirmed     Confirmed     Confirmed     Confirmed     Confirmed 
-
-# GarageQual    GarageCond    PavedDrive    WoodDeckSF   OpenPorchSF EnclosedPorch 
-# Tentative     Confirmed     Confirmed     Confirmed     Confirmed     Tentative 
-
-# X3SsnPorch   ScreenPorch      PoolArea       MiscVal        MoSold        YrSold 
-# Rejected     Tentative      Rejected      Rejected      Rejected      Rejected 
-
-# SaleType SaleCondition 
-# Rejected     Tentative 
-# Levels: Tentative Confirmed Rejected
-# 
-# table(boruta_output$finalDecision)
-# 
 # Tentative Confirmed  Rejected 
 # 11        45        18 
 
+final.boruta <- TentativeRoughFix(boruta_output)
+final.boruta
+  
+getSelectedAttributes(boruta_output)
+getSelectedAttributes(final.boruta, withTentative = F)
+getSelectedAttributes(boruta_output)
+  
+boruta.df <- attStats(final.boruta)
+print(boruta.df)
+arrange(cbind(attr=rownames(attStats(boruta_output)), attStats(boruta_output)),desc(medianImp))
+boruta.df[which(boruta.df$medianImp>2.8),]
+  
 #-------------------------------------------------------------------------------
 ## Important Variables
 names(train2)
-
-train_impVar<-train2[,c(1:4,7,11,14:19,22:26,28,29,32,33,36,37,39,40,42,43,45,46,48:53,55:60,62:65)]
+train_impVar<-train2[,getSelectedAttributes(boruta_output)]
 names(train_impVar)
-# [1] "MSSubClass"   "MSZoning"     "LotFrontage"  "LotArea"      "LandContour" 
-# [6] "Neighborhood" "BldgType"     "HouseStyle"   "OverallQual"  "OverallCond" 
-# [11] "YearBuilt"    "YearRemodAdd" "Exterior1st"  "Exterior2nd"  "MasVnrType"  
-# [16] "MasVnrArea"   "ExterQual"    "Foundation"   "BsmtQual"     "BsmtFinType1"
-# [21] "BsmtFinSF1"   "BsmtUnfSF"    "TotalBsmtSF"  "HeatingQC"    "CentralAir"  
-# [26] "X1stFlrSF"    "X2ndFlrSF"    "GrLivArea"    "BsmtFullBath" "FullBath"    
-# [31] "HalfBath"     "BedroomAbvGr" "KitchenAbvGr" "KitchenQual"  "TotRmsAbvGrd"
-# [36] "Fireplaces"   "GarageType"   "GarageYrBlt"  "GarageFinish" "GarageCars"  
-# [41] "GarageArea"   "GarageCond"   "PavedDrive"   "WoodDeckSF"   "OpenPorchSF" 
 
+train_impVar
 #-----------------------------------------------------------------------
-### Model Building
+# Using traditional RFE method for feature selection
 
-require(randomForest)
-fit=randomForest(train2$SalePrice~., data=train_impVar)
+set.seed(123)
+control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+rfe.train <- rfe(train2[,1:74], train2[,75], sizes=1:12, rfeControl=control)
+rfe.train
+plot(rfe.train, type=c("g", "o"), cex = 1.0, col = 1:74)
+predictors(rfe.train)
+
+#-----------------------------------------------------
+M <- cor(finalData)
+corrplot(M, method="circle")
+corrplot(M, type="lower")
+
+
+cor.mtest <- function(mat, conf.level = 0.95){
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat <- lowCI.mat <- uppCI.mat <- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  diag(lowCI.mat) <- diag(uppCI.mat) <- 1
+  for(i in 1:(n-1)){
+    for(j in (i+1):n){
+      tmp <- cor.test(mat[,i], mat[,j], conf.level = conf.level)
+      p.mat[i,j] <- p.mat[j,i] <- tmp$p.value
+      lowCI.mat[i,j] <- lowCI.mat[j,i] <- tmp$conf.int[1]
+      uppCI.mat[i,j] <- uppCI.mat[j,i] <- tmp$conf.int[2]
+    }
+  }
+  return(list(p.mat, lowCI.mat, uppCI.mat))
+}
+
+res1 <- cor.mtest(train2,0.95)
+res2 <- cor.mtest(train2,0.99)
+## specialized the insignificant value according to the significant level
+corrplot(M, p.mat = res1[[1]], sig.level=0.2)
+
+
+#########################################################################
+#################### Model Building #####################################
+#########################################################################
 
 
 finalData<-train2
@@ -183,28 +189,123 @@ inVal <- createDataPartition(testdataStd$SalePrice, p=0.5, list=FALSE)
 crossvalStd <- testdataStd[inVal,]
 testingStd <- testdataStd[-inVal,]
 
-
 #xgbTree
+curr.model <- train(SalePrice ~ .,data = trainingStd,method = "xgbTree")
+preds<- predict(curr.model,testdataStd)
+preds
+sqrt(mean((log(testdataStd$SalePrice+1) - log(preds+1))^2))
+#0.1393658
+
 curr.model <- train(SalePrice ~ .,data = finalData,method = "xgbTree")
 preds<- predict(curr.model,test2)
 preds
+output_xgboost<-as.data.frame(preds)
+
+#Knn
+knn_model <- train(SalePrice ~ .,data = trainingStd,method = "knn")
+knnpreds<- predict(knn_model,testdataStd)
+knnpreds
+sqrt(mean((log(testdataStd$SalePrice+1) - log(knnpreds+1))^2))
+#0.2169576
 
 #SVM
-library(e1071)
-model <- svm(SalePrice ~ .,data = finalData)
-svmoutput<- predict(object = model, newdata = test2)
-submission <- data.frame(Id= test2$Id)
-submission$svm<-svmoutput
-submission$xgbTree<-preds
+model <- svm(SalePrice ~ .,data = trainingStd)
+svmoutput<- predict(object = model, newdata = testdataStd)
+svmoutput
+rmse(svmoutput, testdataStd$SalePrice)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(svmoutput+1))^2))
+#0.1520209
+
+##Random Forest
+rpart.model <- train(SalePrice ~ .,data = trainingStd,method = "rpart")
+rpart_preds<- predict(rpart.model,testdataStd)
+rpart_preds
+rmse(rpart_preds, testdataStd$SalePrice)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(rpart_preds+1))^2))
+# 0.2658621
+
+## Random Forest
+rfFit=randomForest(SalePrice ~ .,data = trainingStd)
+rfpreds<- predict(rfFit,testdataStd)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(rfpreds+1))^2))
+#0.1415965
+
+## GBM
+gbmModel<-gbm(formula = trainingStd$SalePrice~ .,
+    data = trainingStd[,-48],
+    var.monotone = NULL,
+    n.trees = 500000,
+    interaction.depth = 1,
+    n.minobsinnode = 10,
+    shrinkage = 0.001,
+    bag.fraction = 0.5,
+    train.fraction = 1.0,
+    cv.folds=0,
+    keep.data = TRUE,
+    verbose = "CV",
+    class.stratify.cv=NULL,
+    n.cores = NULL)
+
+gbmpreds<- predict(gbmModel,testdataStd,n.trees = 500000)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(gbmpreds+1))^2))
+# 0.1420983
+
+## lm
+lm_fit<-lm(trainingStd$SalePrice~ .,data=trainingStd[,-48])
+lm_preds<- predict(lm_fit,testdataStd)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(lm_preds+1))^2))
+#0.1655893
+
+## Robust Fitting of Linear Models
+library(MASS)
+what <- "RLM"
+RLM_model <- rlm(trainingStd$SalePrice~ .,data=trainingStd[,-48])
+RLM_preds <- predict(RLM_model, type="response", testdataStd)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(RLM_preds+1))^2))
+#0.1514151
+
+##
+library(earth)
+what <- "MARS (earth)"
+EARTH_model <- earth(trainingStd$SalePrice~ .,data=trainingStd[,-48])
+earth_pred <- predict(EARTH_model, testdataStd)
+sqrt(mean((log(testdataStd$SalePrice+1) - log(earth_pred+1))^2))
+#0.147303
 
 
-write.csv(submission,"D:/My Stuff/Kaggle/House Pricing/submission.csv")
+#---------------------------------------------------------------------------------
+write.csv(output_xgboost,"D:/My Stuff/Kaggle/House Pricing/xgboost_submission.csv")
+preds
 
+gbmImp <- varImp(rpart.model, scale = FALSE)
+gbmImp
+# rpart variable importance
+# only 20 most important variables shown (out of 45)
+# Overall
 
+# OverallQual   0.8264
+# GrLivArea     0.6621
+# YearBuilt     0.5919
+# GarageCars    0.3573
+# ExterQual     0.3476
+# FullBath      0.3003
+# GarageFinish  0.2828
+# Fireplaces    0.0000
+# MSSubClass    0.0000
+# MasVnrType    0.0000
+# GarageCond    0.0000
+# GarageType    0.0000
+# YearRemodAdd  0.0000
+# BsmtFullBath  0.0000
+# HalfBath      0.0000
+# PavedDrive    0.0000
+# HouseStyle    0.0000
+# LotArea       0.0000
+# OverallCond   0.0000
+# OpenPorchSF   0.0000
 
-
-
-
+gbmImp <- varImp(model, scale = FALSE)
+gbmImp
 
 
 
